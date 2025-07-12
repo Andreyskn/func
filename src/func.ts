@@ -95,7 +95,6 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 	const id = Symbol();
 	const errors: ErrorSet = {};
 	let fn!: F;
-	let result!: Result<E, F>;
 
 	if (typeof errorsOrFn === 'function') {
 		fn = errorsOrFn;
@@ -108,29 +107,36 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 		result: T,
 		...args: Parameters<F>
 	) => asserts result is ResultSettled<T> = (
-		_: unknown,
+		result: Result<E, F>,
 		...args: Parameters<F>
 	) => {
 		try {
-			result = { type: 'initial', value: undefined };
 			callStack.push({ id, errors });
 
 			const out = fn(...args);
-			result = isPromise<ReturnType<F>>(out)
-				? { type: 'promise', value: out.finally(onExit) }
-				: { type: 'value', value: out };
+
+			if (isPromise(out)) {
+				result.type = 'promise';
+				result.value = out
+					.catch((err: any) => onError(result, err))
+					.finally(() => onExit(result));
+			} else {
+				result.type = 'value';
+				result.value = out;
+			}
 		} catch (err) {
-			onError(err);
+			onError(result, err);
 		} finally {
 			if (result.type !== 'promise') {
-				onExit();
+				onExit(result);
 			}
 		}
 	};
 
-	const onError = (err: unknown) => {
+	const onError = (result: Result<E, F>, err: unknown) => {
+		result.type = 'error';
 		if (err instanceof CustomError && err.id === id) {
-			result = { type: 'error', value: err };
+			result.value = err;
 			return;
 		}
 
@@ -139,39 +145,40 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 			DEFAULT_ERROR_MESSAGE;
 
 		const error = CustomError.wrap(err, id, DEFAULT_ERROR_KIND, message);
-		result = { type: 'error', value: error };
+		result.value = error;
 	};
 
-	const onExit = () => {
+	const onExit = (result: Result<E, F>) => {
 		const context = callStack.pop();
 
 		if (context?.deferred) {
 			const { deferred } = context;
-			const arg = result.type === 'error' ? result.value : undefined;
+			const errors: any[] = [];
 
-			func(errors, () => {
-				const errors: any[] = [];
+			while (deferred.length) {
+				const deferredFn = deferred.pop()! as DeferredFn<E>;
 
-				while (deferred.length) {
-					const deferredFn = deferred.pop()! as DeferredFn<E>;
-
-					try {
-						deferredFn(arg);
-					} catch (e) {
-						errors.push(e);
-					}
+				try {
+					deferredFn(result.type === 'error' ? result.value : undefined);
+				} catch (e) {
+					errors.push(e);
 				}
+			}
 
-				if (errors.length) {
-					// TODO: AggregateError https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError
-					throw errors[0];
-				}
-			})().try();
+			if (errors.length) {
+				// TODO: AggregateError https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError
+				result.type = 'error';
+				result.value = errors[0]; // TODO: don't forget the previous error
+			}
 		}
 	};
 
 	return (...args) => ({
 		try() {
+			const result = {
+				type: 'initial',
+				value: undefined,
+			} as any as ResultSettled<Result<E, F>>;
 			execute(result, ...args);
 
 			const handleSyncResult = () => {
@@ -182,15 +189,20 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 			};
 
 			if (result.type === 'promise') {
-				return result.value
-					.catch(onError)
-					.then(handleSyncResult) as ReturnType<F>;
+				return result.value.then(handleSyncResult) as ReturnType<F>;
 			}
 
 			return handleSyncResult();
 		},
 
-		catch<H extends (err: CustomError<E>) => any>(handler: H) {
+		catch<H extends (err: CustomError<E>) => any>(
+			handler: H,
+			r: Result<E, F> = {
+				type: 'initial',
+				value: undefined,
+			}
+		) {
+			const result = r as any as ResultSettled<Result<E, F>>;
 			execute(result, ...args);
 
 			const handleSyncResult = () => {
@@ -201,9 +213,7 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 			};
 
 			if (result.type === 'promise') {
-				return result.value
-					.catch(onError)
-					.then(handleSyncResult) as CatchReturn<F, H>;
+				return result.value.then(handleSyncResult) as CatchReturn<F, H>;
 			}
 
 			return handleSyncResult() as CatchReturn<F, H>;
@@ -214,7 +224,13 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 		},
 
 		call() {
-			const out = this.catch((error) => error);
+			const result: Result<E, F> = {
+				type: 'initial',
+				value: undefined,
+			} as any as ResultSettled<Result<E, F>>;
+			// FIXME:
+			// @ts-ignore
+			const out = this.catch((error) => error, result);
 
 			if (isPromise(out)) {
 				const result = (out as Promise<any>).then((value) => {

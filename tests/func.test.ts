@@ -177,6 +177,42 @@ describe('defer util', () => {
 		expect(result).toBe('async');
 		expect(called).toBe(true);
 	});
+
+	test.only('defer is executed in the correct context for concurrent async funcs', async () => {
+		const deferCalls = new Map<string, string>();
+		const fn = func(
+			{ Inner1: '', Inner2: '', Outer: '' },
+			async (name: string) => {
+				const { defer, error } = getFuncUtils<typeof fn>();
+
+				defer((err) => deferCalls.set(name, err!.kind));
+
+				if (name === 'Inner1') {
+					await new Promise((r) => setTimeout(r, 0));
+					throw error.Inner1();
+				}
+
+				if (name === 'Inner2') {
+					defer((err) => deferCalls.set(name, err!.kind));
+
+					await new Promise((r) => setTimeout(r, 5));
+					throw error.Inner2();
+				}
+
+				if (name === 'Outer') {
+					fn('Inner1').call();
+					fn('Inner2').call();
+
+					defer((err) => deferCalls.set(name, err!.kind));
+
+					await new Promise((r) => setTimeout(r, 10));
+					throw error.Outer();
+				}
+			}
+		);
+		await fn('Outer').call();
+		deferCalls.forEach((v, k) => expect(k).toEqual(v));
+	});
 });
 
 describe('option method', () => {
