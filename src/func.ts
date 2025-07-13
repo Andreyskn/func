@@ -1,5 +1,3 @@
-import { callStack } from './callStack';
-import { isPromise, type AnyFunction, type Maybe } from './common';
 import {
 	CustomError,
 	DEFAULT_ERROR_KIND,
@@ -7,26 +5,16 @@ import {
 	type DefaultErrorSet,
 	type ErrorSet,
 } from './error';
-import type { DeferredFn } from './utils';
+import {
+	isObject,
+	isPromise,
+	type AnyFunction,
+	type Maybe,
+	type Replace,
+} from './helpers';
+import { isUtilsCmd, type DeferredFn, type UtilCmd } from './utils';
 
 // TODO: eslint rule to to detect partially called funcs
-
-export type Func<E extends ErrorSet, F extends AnyFunction> = (
-	...args: Parameters<F>
-) => FuncMethods<F, E>;
-
-export type FuncMethods<
-	F extends AnyFunction,
-	E extends ErrorSet,
-	EE extends ErrorSet = E & DefaultErrorSet
-> = {
-	try: () => ReturnType<F>;
-	catch: <H extends (err: CustomError<EE>) => any>(
-		handler: H
-	) => CatchReturn<F, H>;
-	option: () => OptionReturn<F>;
-	call: () => CallReturn<F, EE>;
-};
 
 export type CatchHandlerReturn<
 	H extends AnyFunction,
@@ -53,113 +41,229 @@ export type CallReturn<
 	? Promise<{ ok: true; value: V } | { ok: false; error: CustomError<E> }>
 	: { ok: true; value: R } | { ok: false; error: CustomError<E> };
 
-type Result<E extends ErrorSet, F extends AnyFunction> =
-	| ResultValue<F>
-	| ResultError<E>
-	| ResultPromise<F>
-	| ResultInitial;
+type FuncGen<R, E extends ErrorSet> = Generator<E | UtilCmd, R>;
 
-type ResultValue<F extends AnyFunction> = {
-	type: 'value';
-	value: ReturnType<F>;
+type AsyncFuncGen<R, E extends ErrorSet> = AsyncGenerator<E | UtilCmd, R>;
+
+type AnyFuncGen = FuncGen<any, any> | AsyncFuncGen<any, any>;
+
+type InferFuncGenReturn<G extends AnyFuncGen> = G extends AsyncFuncGen<
+	infer R,
+	any
+>
+	? Promise<R>
+	: G extends FuncGen<infer R, any>
+	? R
+	: never;
+
+type InferFuncGenErrors<G extends AnyFuncGen> = G extends AsyncFuncGen<
+	any,
+	infer E
+>
+	? E
+	: G extends FuncGen<any, infer E>
+	? E
+	: never;
+
+type FuncWrapper<
+	P extends any[],
+	G extends FuncGen<any, any> | AsyncFuncGen<any, any>,
+	R extends any = InferFuncGenReturn<G>,
+	F extends AnyFunction = (...args: P) => R,
+	E extends ErrorSet = InferFuncGenErrors<G>
+> = (...args: P) => FuncWrapperMethods<F, E>; // TODO: & Utils
+
+type FuncWrapperMethods<
+	F extends AnyFunction,
+	E extends ErrorSet,
+	EE extends ErrorSet = E & DefaultErrorSet
+> = {
+	try: () => ReturnType<F>;
+	catch: <H extends (err: CustomError<EE>) => any>(
+		handler: H
+	) => CatchReturn<F, H>;
+	option: () => OptionReturn<F>;
+	call: () => CallReturn<F, EE>;
 };
 
-type ResultError<E extends ErrorSet> = {
-	type: 'error';
-	value: CustomError<E>;
+const enum ContextResultKind {
+	Promise,
+	Resolved,
+	Error,
+}
+type ContextResultBase<
+	K extends ContextResultKind,
+	V extends Record<string, any>
+> = { kind: K } & V;
+
+type ContextResultPromise = ContextResultBase<
+	ContextResultKind.Promise,
+	{ promise: Promise<any> }
+>;
+
+type ContextResultResolved = ContextResultBase<
+	ContextResultKind.Resolved,
+	{ value: any }
+>;
+
+type ContextResultError = ContextResultBase<
+	ContextResultKind.Error,
+	{ error: CustomError<any> }
+>;
+
+type ContextResult = ContextResultFinal | ContextResultPromise;
+
+type ContextResultFinal = ContextResultResolved | ContextResultError;
+
+type Context = {
+	id: symbol;
+	generator: AnyFuncGen;
+	errorSet?: Readonly<ErrorSet>;
+	result?: ContextResult;
+	deferred?: DeferredFn<ErrorSet>[];
+	payload?: any;
 };
 
-type ResultPromise<F extends AnyFunction> = {
-	type: 'promise';
-	value: Promise<ReturnType<F>>;
-};
-
-type ResultInitial = {
-	type: 'initial';
-	value: undefined;
-};
-
-type ResultSettled<T extends Result<any, any>> = Exclude<T, ResultInitial>;
-
-export function func<F extends AnyFunction>(fn: F): Func<DefaultErrorSet, F>;
-
-export function func<E extends ErrorSet, F extends AnyFunction>(
-	errors: E,
-	fn: F
-): Func<E, F>;
-
-export function func<E extends ErrorSet, F extends AnyFunction>(
-	errorsOrFn: E | F,
-	maybeFn?: F
-): Func<E, F> {
-	const id = Symbol();
-	const errors: ErrorSet = {};
-	let fn!: F;
-
-	if (typeof errorsOrFn === 'function') {
-		fn = errorsOrFn;
-	} else {
-		Object.assign(errors, errorsOrFn);
-		fn = maybeFn!;
+function assertResult(
+	ctx: Context
+): asserts ctx is Replace<Context, { result: ContextResult }> {
+	if (!ctx.result) {
+		throw Error('Processing failed. Missing result');
 	}
+}
 
-	const execute: <T extends Result<E, F>>(
-		result: T,
-		...args: Parameters<F>
-	) => asserts result is ResultSettled<T> = (
-		result: Result<E, F>,
-		...args: Parameters<F>
-	) => {
+function assertResultIsFinal(
+	ctx: Context
+): asserts ctx is Replace<Context, { result: ContextResultFinal }> {
+	assertResult(ctx);
+	if (ctx.result.kind === ContextResultKind.Promise) {
+		throw Error('Result is not resolved');
+	}
+}
+
+export const funcV2 = <
+	P extends any[],
+	G extends AnyFuncGen,
+	R extends any = InferFuncGenReturn<G>,
+	F extends AnyFunction = (...args: P) => R,
+	E extends ErrorSet = InferFuncGenErrors<G>
+>(
+	fn: (...args: P) => G
+): FuncWrapper<P, G> => {
+	const process = (ctx: Context) => {
 		try {
-			callStack.push({ id, errors });
+			while (true) {
+				const { payload } = ctx;
+				ctx.payload = undefined;
 
-			const out = fn(...args);
+				if (payload && payload instanceof CustomError) {
+					ctx.generator.throw(payload);
+					continue;
+				}
 
-			if (isPromise(out)) {
-				result.type = 'promise';
-				result.value = out
-					.catch((err: any) => onError(result, err))
-					.finally(() => onExit(result));
-			} else {
-				result.type = 'value';
-				result.value = out;
+				const result = ctx.generator.next(payload);
+
+				if (isPromise(result)) {
+					ctx.result = { kind: ContextResultKind.Promise, promise: result };
+					break;
+				}
+
+				const { value, done } = result;
+
+				if (done) {
+					ctx.result = { kind: ContextResultKind.Resolved, value };
+					break;
+				}
+
+				if (!isObject(value)) {
+					throw Error(`Expected object, received "${value}"`);
+				}
+
+				if (isUtilsCmd(value)) {
+					// ctx.payload = utils.execute(ctx, value);
+				} else {
+					ctx.errorSet = value as E;
+				}
 			}
-		} catch (err) {
-			onError(result, err);
+		} catch (error) {
+			handleCatch(ctx, error);
 		} finally {
-			if (result.type !== 'promise') {
-				onExit(result);
-			}
+			return handleFinally(ctx);
 		}
 	};
 
-	const onError = (result: Result<E, F>, err: unknown) => {
-		result.type = 'error';
-		if (err instanceof CustomError && err.id === id) {
-			result.value = err;
+	const processAsync = async (ctx: Context) => {
+		try {
+			while (true) {
+				const { payload } = ctx;
+				ctx.payload = undefined;
+
+				if (payload instanceof CustomError) {
+					ctx.generator.throw(payload);
+					continue;
+				}
+
+				const { value, done } = await ctx.generator.next(payload);
+
+				if (done) {
+					ctx.result = { kind: ContextResultKind.Resolved, value };
+					break;
+				}
+
+				if (!isObject(value)) {
+					throw Error(`Expected object, received "${value}"`);
+				}
+
+				if (isUtilsCmd(value)) {
+					// ctx.payload = utils.execute(ctx, value);
+				} else {
+					ctx.errorSet = value as E;
+				}
+			}
+		} catch (error) {
+			handleCatch(ctx, error);
+		} finally {
+			return handleFinally(ctx);
+		}
+	};
+
+	const handleCatch = (ctx: Context, error: unknown) => {
+		if (error && error instanceof CustomError && error.id === ctx.id) {
+			ctx.result = { kind: ContextResultKind.Error, error };
 			return;
 		}
 
 		const message =
-			(err && typeof err === 'object' && (err as any).message) ||
+			(error && typeof error === 'object' && (error as any).message) ||
 			DEFAULT_ERROR_MESSAGE;
 
-		const error = CustomError.wrap(err, id, DEFAULT_ERROR_KIND, message);
-		result.value = error;
+		ctx.result = {
+			kind: ContextResultKind.Error,
+			error: CustomError.wrap(error, ctx.id, DEFAULT_ERROR_KIND, message),
+		};
 	};
 
-	const onExit = (result: Result<E, F>) => {
-		const context = callStack.pop();
+	const handleFinally = (ctx: Context) => {
+		assertResult(ctx);
 
-		if (context?.deferred) {
-			const { deferred } = context;
+		if (ctx.result.kind === ContextResultKind.Promise) {
+			return;
+		}
+
+		if (ctx?.deferred) {
+			const { deferred } = ctx;
 			const errors: any[] = [];
 
 			while (deferred.length) {
 				const deferredFn = deferred.pop()! as DeferredFn<E>;
 
 				try {
-					deferredFn(result.type === 'error' ? result.value : undefined);
+					// TODO: pass AggregateError
+					deferredFn(
+						ctx.result.kind === ContextResultKind.Error
+							? ctx.result.error
+							: undefined
+					);
 				} catch (e) {
 					errors.push(e);
 				}
@@ -167,85 +271,83 @@ export function func<E extends ErrorSet, F extends AnyFunction>(
 
 			if (errors.length) {
 				// TODO: AggregateError https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError
-				result.type = 'error';
-				result.value = errors[0]; // TODO: don't forget the previous error
+				ctx.result = { kind: ContextResultKind.Error, error: errors[0] }; // TODO: don't forget the original error
 			}
 		}
 	};
 
-	return (...args) => ({
-		try() {
-			const result = {
-				type: 'initial',
-				value: undefined,
-			} as any as ResultSettled<Result<E, F>>;
-			execute(result, ...args);
+	const processor = (...args: P) => {
+		const ctx: Context = {
+			id: Symbol(),
+			generator: fn(...args),
+		};
 
-			const handleSyncResult = () => {
-				if (result.type === 'error') {
-					throw result.value;
+		const methods: FuncWrapperMethods<F, E> = {
+			try() {
+				const handleResult = () => {
+					assertResultIsFinal(ctx);
+
+					if (ctx.result.kind === ContextResultKind.Error) {
+						throw ctx.result.error;
+					} else {
+						return ctx.result.value;
+					}
+				};
+
+				process(ctx);
+
+				if (ctx.result?.kind === ContextResultKind.Promise) {
+					return processAsync(ctx).then(handleResult);
+				} else {
+					return handleResult();
 				}
-				return result.value as ReturnType<F>;
-			};
+			},
 
-			if (result.type === 'promise') {
-				return result.value.then(handleSyncResult) as ReturnType<F>;
-			}
+			catch(handler) {
+				const handleResult = () => {
+					assertResultIsFinal(ctx);
 
-			return handleSyncResult();
-		},
+					if (ctx.result.kind === ContextResultKind.Error) {
+						return handler(ctx.result.error);
+					} else {
+						return ctx.result.value;
+					}
+				};
 
-		catch<H extends (err: CustomError<E>) => any>(
-			handler: H,
-			r: Result<E, F> = {
-				type: 'initial',
-				value: undefined,
-			}
-		) {
-			const result = r as any as ResultSettled<Result<E, F>>;
-			execute(result, ...args);
+				process(ctx);
 
-			const handleSyncResult = () => {
-				if (result.type === 'error') {
-					return handler(result.value) as ReturnType<H>;
+				if (ctx.result?.kind === ContextResultKind.Promise) {
+					return processAsync(ctx).then(handleResult);
+				} else {
+					return handleResult();
 				}
-				return (result as ResultValue<F>).value;
-			};
+			},
 
-			if (result.type === 'promise') {
-				return result.value.then(handleSyncResult) as CatchReturn<F, H>;
-			}
+			option() {
+				return this.catch(() => undefined);
+			},
 
-			return handleSyncResult() as CatchReturn<F, H>;
-		},
+			call() {
+				const handleResult = (result: any) => {
+					if (result instanceof CustomError) {
+						return { ok: false, error: result };
+					} else {
+						return { ok: true, value: result };
+					}
+				};
 
-		option() {
-			return this.catch(() => undefined);
-		},
+				const result = this.catch((error) => error);
 
-		call() {
-			const result: Result<E, F> = {
-				type: 'initial',
-				value: undefined,
-			} as any as ResultSettled<Result<E, F>>;
-			// FIXME:
-			// @ts-ignore
-			const out = this.catch((error) => error, result);
+				if (isPromise(result)) {
+					return result.then(handleResult);
+				} else {
+					return handleResult(result);
+				}
+			},
+		};
 
-			if (isPromise(out)) {
-				const result = (out as Promise<any>).then((value) => {
-					return value instanceof CustomError
-						? { ok: false, error: value }
-						: { ok: true, value };
-				});
-				return result as CallReturn<F, E>;
-			}
+		return methods;
+	};
 
-			if (result.type === 'error') {
-				return { ok: false, error: result.value } as CallReturn<F, E>;
-			} else {
-				return { ok: true, value: result.value } as CallReturn<F, E>;
-			}
-		},
-	});
-}
+	return processor as FuncWrapper<P, G>;
+};
