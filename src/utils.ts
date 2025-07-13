@@ -1,106 +1,177 @@
-import { callStack } from './callStack';
-import { isPromise, type AnyFunction } from './common';
 import {
 	CustomError,
 	type DefaultErrorSet,
 	type ErrorCreator,
 	type ErrorSet,
 } from './error';
-import { func, type Func } from './func';
-
-export type DeferredFn<E extends ErrorSet> = (error?: CustomError<E>) => void;
-
-export type InferErrors<F extends Func<any, any>> = F extends Func<infer E, any>
-	? E
-	: never;
+import type { Context, DeferredFn } from './func';
+import { isPromise, type AnyFunction } from './helpers';
+import { store } from './store';
 
 export type Utils<
-	F extends Func<any, any>,
-	E extends ErrorSet = InferErrors<F>,
-	EE extends ErrorSet = E & DefaultErrorSet
+	E extends ErrorSet,
+	ED extends ErrorSet = E & DefaultErrorSet
 > = {
-	defer: (fn: DeferredFn<EE>) => void;
-	call: <F extends () => any>(fn: F) => UtilCallReturn<F>;
-} & (E extends DefaultErrorSet
-	? {}
-	: {
-			error: {
-				[K in keyof E]: E[K] extends string
-					? () => CustomError<E>
-					: (...args: Parameters<ErrorCreator & E[K]>) => CustomError<E>;
-			};
-			throws: <T>(error: CustomError<E>, fn: () => T) => T;
-	  });
+	commands: {
+		defer: (fn: DeferredFn<ED>) => Generator<DeferCommand, void>;
+		result: <F extends () => any>(
+			fn: F
+		) => Generator<ResultCommand, UtilResultReturn<F>>;
+	} & (E extends DefaultErrorSet
+		? {}
+		: {
+				error: {
+					[K in keyof E]: E[K] extends string
+						? () => Generator<ErrorCommand, CustomError<E>>
+						: (
+								...args: Parameters<ErrorCreator & E[K]>
+						  ) => Generator<ErrorCommand, CustomError<E>>;
+				};
+				throws: <T>(
+					error: CustomError<E>,
+					fn: () => T
+				) => Generator<ThrowsCommand, T>;
+		  });
+	execute: (cmd: UtilCommand) => any;
+};
 
-export type UtilCallReturn<
+export type UtilResultReturn<
 	F extends AnyFunction,
 	R = ReturnType<F>
 > = R extends Promise<infer V>
 	? Promise<{ ok: true; value: V } | { ok: false; error: any }>
 	: { ok: true; value: R } | { ok: false; error: any };
 
-const getContext = () => {
-	const context = callStack.peek();
+const ERROR = Symbol('ERROR');
+const DEFER = Symbol('DEFER');
+const THROWS = Symbol('THROWS');
+const RESULT = Symbol('RESULT');
 
-	if (!context) {
-		throw Error('Attempted to access FuncUtils outside of func context');
+const UTIL_SYMBOLS = [ERROR, DEFER, THROWS, RESULT] as const;
+
+type UtilSymbol = (typeof UTIL_SYMBOLS)[number];
+
+type UtilCommandBase<S extends UtilSymbol, T> = { kind: S; payload: T };
+
+type ErrorCommand = UtilCommandBase<
+	typeof ERROR,
+	{ errorKind: string; args: any[] }
+>;
+
+type DeferCommand = UtilCommandBase<
+	typeof DEFER,
+	{ fn: (err?: CustomError<any>) => void }
+>;
+
+type ThrowsCommand = UtilCommandBase<
+	typeof THROWS,
+	{ error: CustomError<any>; fn: () => unknown }
+>;
+
+type ResultCommand = UtilCommandBase<typeof RESULT, { fn: () => unknown }>;
+
+export type UtilCommand =
+	| ErrorCommand
+	| DeferCommand
+	| ThrowsCommand
+	| ResultCommand;
+
+function* defer(
+	fn: (err?: CustomError<any>) => void
+): Generator<DeferCommand, void> {
+	return yield { kind: DEFER, payload: { fn } };
+}
+
+function* result(fn: () => any): Generator<ResultCommand, any> {
+	return yield { kind: RESULT, payload: { fn } };
+}
+
+function* throws(error: any, fn: () => any): Generator<ThrowsCommand, any> {
+	return yield { kind: THROWS, payload: { error, fn } };
+}
+
+const error = new Proxy(
+	{},
+	{
+		get(_, errorKind: string) {
+			return (...args: any[]) => {
+				return function* (): Generator<ErrorCommand, CustomError<any>> {
+					return yield { kind: ERROR, payload: { errorKind, args } };
+				};
+			};
+		},
 	}
+);
 
-	return context;
+export const isUtilsCommand = (v: Record<keyof any, unknown>): boolean => {
+	return UTIL_SYMBOLS.some((s) => Object.hasOwn(v, s));
 };
 
-export const getFuncUtils = <
-	F extends Func<any, any>,
-	E extends ErrorSet = InferErrors<F>
->(): Utils<F> => {
-	let utilsErrorCache: Utils<Func<{}, any>>['error'] | undefined;
+export const initUtils = (ctx: Context) => {
+	let errorCreators: Utils<{}>['commands']['error'] | undefined;
 
-	const utils: Utils<Func<any, any>> = {
-		get error() {
-			return (utilsErrorCache ??= Object.fromEntries(
-				Object.entries(getContext().errors).map(([key, message]) => {
-					return [
-						key,
-						(...args: any) =>
-							CustomError.init(
-								getContext().id,
+	const utils = {
+		commands: {
+			error,
+			defer,
+			throws,
+			result,
+		},
+		execute: ({ kind, payload }: UtilCommand) => {
+			switch (kind) {
+				case DEFER:
+					(ctx.deferred ??= []).push(payload.fn);
+					break;
+
+				case ERROR:
+					return (errorCreators ??= Object.fromEntries(
+						Object.entries(ctx.errorSet ?? {}).map(([key, message]) => {
+							return [
 								key,
-								typeof message === 'string' ? message : message(...args)
-							),
-					];
-				})
-			));
+								(...args: any) =>
+									CustomError.init(
+										ctx.id,
+										key,
+										typeof message === 'string' ? message : message(...args)
+									),
+							];
+						})
+					));
+
+				case THROWS:
+					return store
+						.func(function* () {
+							return payload.fn();
+						})()
+						.catch((err) => {
+							payload.error.cause = err;
+							throw payload.error;
+						});
+
+				case RESULT:
+					return store
+						.func(function* () {
+							const out = payload.fn();
+
+							if (isPromise(out)) {
+								return out.then(
+									(value) => ({ ok: true, value }),
+									(error) => ({ ok: false, error })
+								);
+							}
+
+							return { ok: true, value: out };
+						})()
+						.catch((err) => ({
+							ok: false,
+							error: err.cause,
+						}));
+			}
 		},
+	} satisfies Utils<ErrorSet>;
 
-		defer(fn) {
-			(getContext().deferred ??= []).push(fn);
-		},
-
-		throws<T>(customError: CustomError<E>, fn: () => T) {
-			return func(fn)().catch((err) => {
-				customError.cause = err;
-				throw customError;
-			}) as T;
-		},
-
-		call<F extends () => any>(fn: F) {
-			return func(() => {
-				const out = fn();
-
-				if (isPromise<ReturnType<F>>(out)) {
-					return out.then(
-						(value) => ({ ok: true, value }),
-						(error) => ({ ok: false, error })
-					);
-				}
-
-				return { ok: true, value: out };
-			})().catch((err: CustomError<any>) => ({
-				ok: false,
-				error: err.cause,
-			})) as UtilCallReturn<F>;
-		},
-	};
-
-	return utils as any as Utils<F>;
+	ctx.utils = utils;
 };
+
+store.setInitUtils(initUtils);
+store.setIsUtilsCommand(isUtilsCommand);

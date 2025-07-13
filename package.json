@@ -2,24 +2,26 @@
 	"name": "@andrey/func",
 	"version": "0.1.0",
 	"main": "dist/index.js",
-	"types": "dist/index.d.ts",
-	"type": "module",
+	"devDependencies": {
+		"@microsoft/api-extractor": "^7.52.8",
+		"@types/bun": "latest",
+		"madge": "^8.0.0"
+	},
+	"peerDependencies": {
+		"typescript": "^5.0.0"
+	},
 	"files": [
 		"dist"
 	],
+	"publishConfig": {
+		"registry": "http://asrv:4873"
+	},
 	"scripts": {
+		"check": "tsc && madge --circular lib/index.js",
 		"bundle": "bun bundle:ts && bun bundle:dts",
 		"bundle:dts": "tsc && api-extractor run --local --verbose && rm -rf ./lib",
 		"bundle:ts": "bun build ./src/index.ts --outdir ./dist --target node"
 	},
-	"publishConfig": {
-		"registry": "http://asrv:4873"
-	},
-	"devDependencies": {
-		"@microsoft/api-extractor": "^7.52.8",
-		"@types/bun": "latest"
-	},
-	"peerDependencies": {
-		"typescript": "^5.0.0"
-	}
+	"type": "module",
+	"types": "dist/index.d.ts"
 }

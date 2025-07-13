@@ -1,5 +1,5 @@
 export const DEFAULT_ERROR_KIND = 'UnexpectedError';
-export const DEFAULT_ERROR_MESSAGE = 'Unknown error';
+export const DEFAULT_ERROR_MESSAGE = 'Something went wrong';
 
 export type ErrorSet = Record<string, string | ErrorCreator>;
 
@@ -41,7 +41,7 @@ export class CustomError<T extends ErrorSet> extends Error {
 	};
 
 	constructor(
-		public id: symbol,
+		public id: symbol, // TODO: hide id prop [Symbol.id]
 		public kind: string & keyof T,
 		public message: string,
 		public cause?: unknown

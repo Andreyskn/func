@@ -13,7 +13,6 @@
 		"noEmit": false,
 		"outDir": "lib",
 		"declaration": true,
-		"emitDeclarationOnly": true,
 		"rootDir": "src",
 
 		// Best practices

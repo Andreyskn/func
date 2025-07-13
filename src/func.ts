@@ -12,7 +12,8 @@ import {
 	type Maybe,
 	type Replace,
 } from './helpers';
-import { isUtilsCmd, type DeferredFn, type UtilCmd } from './utils';
+import { store } from './store';
+import type { UtilCommand, Utils } from './utils';
 
 // TODO: eslint rule to to detect partially called funcs
 
@@ -41,9 +42,12 @@ export type CallReturn<
 	? Promise<{ ok: true; value: V } | { ok: false; error: CustomError<E> }>
 	: { ok: true; value: R } | { ok: false; error: CustomError<E> };
 
-type FuncGen<R, E extends ErrorSet> = Generator<E | UtilCmd, R>;
+export type FuncGen<R, E extends ErrorSet> = Generator<E | UtilCommand, R>;
 
-type AsyncFuncGen<R, E extends ErrorSet> = AsyncGenerator<E | UtilCmd, R>;
+export type AsyncFuncGen<R, E extends ErrorSet> = AsyncGenerator<
+	E | UtilCommand,
+	R
+>;
 
 type AnyFuncGen = FuncGen<any, any> | AsyncFuncGen<any, any>;
 
@@ -65,25 +69,25 @@ type InferFuncGenErrors<G extends AnyFuncGen> = G extends AsyncFuncGen<
 	? E
 	: never;
 
-type FuncWrapper<
+export type FuncProcessor<
 	P extends any[],
 	G extends FuncGen<any, any> | AsyncFuncGen<any, any>,
 	R extends any = InferFuncGenReturn<G>,
 	F extends AnyFunction = (...args: P) => R,
 	E extends ErrorSet = InferFuncGenErrors<G>
-> = (...args: P) => FuncWrapperMethods<F, E>; // TODO: & Utils
+> = (...args: P) => FuncProcessorMethods<F, E> & Utils<E>;
 
-type FuncWrapperMethods<
+export type FuncProcessorMethods<
 	F extends AnyFunction,
 	E extends ErrorSet,
-	EE extends ErrorSet = E & DefaultErrorSet
+	ED extends ErrorSet = E & DefaultErrorSet
 > = {
 	try: () => ReturnType<F>;
-	catch: <H extends (err: CustomError<EE>) => any>(
+	catch: <H extends (err: CustomError<ED>) => any>(
 		handler: H
 	) => CatchReturn<F, H>;
 	option: () => OptionReturn<F>;
-	call: () => CallReturn<F, EE>;
+	result: () => CallReturn<F, ED>;
 };
 
 const enum ContextResultKind {
@@ -115,14 +119,17 @@ type ContextResult = ContextResultFinal | ContextResultPromise;
 
 type ContextResultFinal = ContextResultResolved | ContextResultError;
 
-type Context = {
+export type Context = {
 	id: symbol;
 	generator: AnyFuncGen;
 	errorSet?: Readonly<ErrorSet>;
 	result?: ContextResult;
 	deferred?: DeferredFn<ErrorSet>[];
 	payload?: any;
+	utils?: Utils<ErrorSet>;
 };
+
+export type DeferredFn<E extends ErrorSet> = (error?: CustomError<E>) => void;
 
 function assertResult(
 	ctx: Context
@@ -141,7 +148,7 @@ function assertResultIsFinal(
 	}
 }
 
-export const funcV2 = <
+export const func = <
 	P extends any[],
 	G extends AnyFuncGen,
 	R extends any = InferFuncGenReturn<G>,
@@ -149,7 +156,7 @@ export const funcV2 = <
 	E extends ErrorSet = InferFuncGenErrors<G>
 >(
 	fn: (...args: P) => G
-): FuncWrapper<P, G> => {
+): FuncProcessor<P, G> => {
 	const process = (ctx: Context) => {
 		try {
 			while (true) {
@@ -179,8 +186,8 @@ export const funcV2 = <
 					throw Error(`Expected object, received "${value}"`);
 				}
 
-				if (isUtilsCmd(value)) {
-					// ctx.payload = utils.execute(ctx, value);
+				if (store.isUtilsCommand(value)) {
+					ctx.payload = ctx.utils?.execute(value);
 				} else {
 					ctx.errorSet = value as E;
 				}
@@ -214,8 +221,8 @@ export const funcV2 = <
 					throw Error(`Expected object, received "${value}"`);
 				}
 
-				if (isUtilsCmd(value)) {
-					// ctx.payload = utils.execute(ctx, value);
+				if (store.isUtilsCommand(value)) {
+					ctx.payload = ctx.utils?.execute(value);
 				} else {
 					ctx.errorSet = value as E;
 				}
@@ -281,8 +288,9 @@ export const funcV2 = <
 			id: Symbol(),
 			generator: fn(...args),
 		};
+		Object.assign(processor, store.initUtils(ctx));
 
-		const methods: FuncWrapperMethods<F, E> = {
+		const methods: FuncProcessorMethods<F, E> = {
 			try() {
 				const handleResult = () => {
 					assertResultIsFinal(ctx);
@@ -327,7 +335,7 @@ export const funcV2 = <
 				return this.catch(() => undefined);
 			},
 
-			call() {
+			result() {
 				const handleResult = (result: any) => {
 					if (result instanceof CustomError) {
 						return { ok: false, error: result };
@@ -349,5 +357,7 @@ export const funcV2 = <
 		return methods;
 	};
 
-	return processor as FuncWrapper<P, G>;
+	return processor as any;
 };
+
+store.setFunc(func);
