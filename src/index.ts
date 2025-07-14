@@ -1,3 +1,5 @@
+import './utils';
+
 export type {
 	CustomError,
 	DEFAULT_ERROR_KIND,

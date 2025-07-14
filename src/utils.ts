@@ -12,7 +12,7 @@ export type Utils<
 	E extends ErrorSet,
 	ED extends ErrorSet = E & DefaultErrorSet
 > = {
-	commands: {
+	utils: {
 		defer: (fn: DeferredFn<ED>) => Generator<DeferCommand, void>;
 		result: <F extends () => any>(
 			fn: F
@@ -94,24 +94,22 @@ const error = new Proxy(
 	{},
 	{
 		get(_, errorKind: string) {
-			return (...args: any[]) => {
-				return function* (): Generator<ErrorCommand, CustomError<any>> {
-					return yield { kind: ERROR, payload: { errorKind, args } };
-				};
+			return function* (
+				...args: any[]
+			): Generator<ErrorCommand, CustomError<any>> {
+				return yield { kind: ERROR, payload: { errorKind, args } };
 			};
 		},
 	}
 );
 
-export const isUtilsCommand = (v: Record<keyof any, unknown>): boolean => {
-	return UTIL_SYMBOLS.some((s) => Object.hasOwn(v, s));
+export const isUtilsCommand = (v: Record<keyof any, any>): boolean => {
+	return UTIL_SYMBOLS.includes(v['kind']);
 };
 
 export const initUtils = (ctx: Context) => {
-	let errorCreators: Utils<{}>['commands']['error'] | undefined;
-
 	const utils = {
-		commands: {
+		utils: {
 			error,
 			defer,
 			throws,
@@ -123,25 +121,31 @@ export const initUtils = (ctx: Context) => {
 					(ctx.deferred ??= []).push(payload.fn);
 					break;
 
-				case ERROR:
-					return (errorCreators ??= Object.fromEntries(
-						Object.entries(ctx.errorSet ?? {}).map(([key, message]) => {
-							return [
-								key,
-								(...args: any) =>
-									CustomError.init(
-										ctx.id,
-										key,
-										typeof message === 'string' ? message : message(...args)
-									),
-							];
-						})
-					));
+				case ERROR: {
+					const { args, errorKind } = payload;
+					const message = ctx.errorSet![errorKind];
+
+					return CustomError.init(
+						ctx.id,
+						errorKind,
+						typeof message === 'string' ? message : message(...args)
+					);
+				}
 
 				case THROWS:
 					return store
 						.func(function* () {
-							return payload.fn();
+							const out = payload.fn();
+
+							if (isPromise(out)) {
+								// TODO: test
+								return out.catch((err) => {
+									payload.error.cause = err;
+									throw payload.error;
+								});
+							}
+
+							return out;
 						})()
 						.catch((err) => {
 							payload.error.cause = err;
@@ -171,6 +175,7 @@ export const initUtils = (ctx: Context) => {
 	} satisfies Utils<ErrorSet>;
 
 	ctx.utils = utils;
+	return utils;
 };
 
 store.setInitUtils(initUtils);

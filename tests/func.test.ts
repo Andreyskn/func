@@ -1,26 +1,24 @@
 import { describe, expect, test } from 'bun:test';
-import { func } from '../src/func';
-import { getFuncUtils } from '../src/utils';
+import { func } from '../src';
 
 describe('sync', () => {
-	const syncFn = func(
-		{
+	const syncFn = func(function* (arg: string) {
+		yield {
 			SyncError: 'SyncError message',
 			TemplateError: (v: string) => v,
 			a: '',
-		},
-		<T extends string>(arg: T) => {
-			const { error } = getFuncUtils<typeof syncFn>();
+		};
+		const { error } = syncFn.utils;
 
-			if (!arg) {
-				throw error.SyncError();
-			}
-			if (arg === 'idk') {
-				throw Error('idk');
-			}
-			return 'no error';
+		if (!arg) {
+			throw yield* error.SyncError();
 		}
-	);
+
+		if (arg === 'idk') {
+			throw Error('idk');
+		}
+		return 'no error';
+	});
 
 	test('try and fail', () => {
 		expect(syncFn('').try).toThrow('SyncError message');
@@ -68,12 +66,13 @@ describe('sync', () => {
 	});
 
 	test('label and rethrow unknown error', () => {
-		const syncFn = func({ SyncError: 'SyncError message' }, () => {
-			const { error, throws } = getFuncUtils<typeof syncFn>();
+		const syncFn = func(function* () {
+			yield { SyncError: 'SyncError message' };
+			const { error, throws } = syncFn.utils;
 			const inner = () => {
 				throw Error('unknown');
 			};
-			throws(error.SyncError(), inner);
+			yield* throws(yield* error.SyncError(), inner);
 		});
 
 		expect(syncFn().try).toThrow('SyncError message');
@@ -81,23 +80,21 @@ describe('sync', () => {
 });
 
 describe('async', () => {
-	const asyncFn = func(
-		{
+	const asyncFn = func(async function* (arg: string) {
+		yield {
 			AsyncError: 'AsyncError message',
 			TemplateError: (v: string) => v,
 			a: '',
-		},
-		async (arg: string) => {
-			const { error } = getFuncUtils<typeof asyncFn>();
-			if (!arg) {
-				throw error.AsyncError();
-			}
-			if (arg === 'idk') {
-				throw Error('idk');
-			}
-			return 'no error';
+		};
+		const { error } = asyncFn.utils;
+		if (!arg) {
+			throw yield* error.AsyncError();
 		}
-	);
+		if (arg === 'idk') {
+			throw Error('idk');
+		}
+		return 'no error';
+	});
 
 	test('try and fail', () => {
 		expect(async () => await asyncFn('').try()).toThrow('AsyncError message');
@@ -111,9 +108,9 @@ describe('async', () => {
 describe('defer util', () => {
 	test('basic defer is called after main', () => {
 		let called = false;
-		const fn = func(() => {
-			const { defer } = getFuncUtils<typeof fn>();
-			defer(() => {
+		const fn = func(function* () {
+			const { defer } = fn.utils;
+			yield* defer(() => {
 				called = true;
 			});
 			return 42;
@@ -125,11 +122,11 @@ describe('defer util', () => {
 
 	test('defer is called in LIFO order', () => {
 		const order: number[] = [];
-		const fn = func(() => {
-			const { defer } = getFuncUtils<typeof fn>();
-			defer(() => order.push(1));
-			defer(() => order.push(2));
-			defer(() => order.push(3));
+		const fn = func(function* () {
+			const { defer } = fn.utils;
+			yield* defer(() => order.push(1));
+			yield* defer(() => order.push(2));
+			yield* defer(() => order.push(3));
 			return 'done';
 		});
 		fn().try();
@@ -138,12 +135,13 @@ describe('defer util', () => {
 
 	test('defer receives error if main throws', () => {
 		let receivedError: any = undefined;
-		const fn = func({ MyError: 'fail' }, () => {
-			const { defer, error } = getFuncUtils<typeof fn>();
-			defer((err) => {
+		const fn = func(function* () {
+			yield { MyError: 'fail' };
+			const { defer, error } = fn.utils;
+			yield* defer((err) => {
 				receivedError = err;
 			});
-			throw error.MyError();
+			throw yield* error.MyError();
 		});
 		expect(() => fn().try()).toThrow('fail');
 		expect(receivedError).toBeInstanceOf(Error);
@@ -152,9 +150,9 @@ describe('defer util', () => {
 
 	test('defer receives undefined if no error', () => {
 		let receivedError: any = 'not called';
-		const fn = func(() => {
-			const { defer } = getFuncUtils<typeof fn>();
-			defer((err) => {
+		const fn = func(function* () {
+			const { defer } = fn.utils;
+			yield* defer((err) => {
 				receivedError = err;
 			});
 			return 123;
@@ -165,9 +163,9 @@ describe('defer util', () => {
 
 	test('defer works with async functions', async () => {
 		let called = false;
-		const fn = func(async () => {
-			const { defer } = getFuncUtils<typeof fn>();
-			defer(() => {
+		const fn = func(async function* () {
+			const { defer } = fn.utils;
+			yield* defer(() => {
 				called = true;
 			});
 			await new Promise((r) => setTimeout(r, 10));
@@ -178,51 +176,56 @@ describe('defer util', () => {
 		expect(called).toBe(true);
 	});
 
-	test.only('defer is executed in the correct context for concurrent async funcs', async () => {
-		const deferCalls = new Map<string, string>();
-		const fn = func(
-			{ Inner1: '', Inner2: '', Outer: '' },
-			async (name: string) => {
-				const { defer, error } = getFuncUtils<typeof fn>();
+	test('defer is executed in the correct context for concurrent async funcs', async () => {
+		const deferCalls = new Map<{ name: string }, string>();
+		const fn = func(async function* (name: string) {
+			yield { Inner1: '1', Inner2: '1', Outer: '1' };
+			const { defer, error } = fn.utils;
 
-				defer((err) => deferCalls.set(name, err!.kind));
+			yield* defer((err) => deferCalls.set({ name }, err!.kind));
 
-				if (name === 'Inner1') {
-					await new Promise((r) => setTimeout(r, 0));
-					throw error.Inner1();
-				}
-
-				if (name === 'Inner2') {
-					defer((err) => deferCalls.set(name, err!.kind));
-
-					await new Promise((r) => setTimeout(r, 5));
-					throw error.Inner2();
-				}
-
-				if (name === 'Outer') {
-					fn('Inner1').call();
-					fn('Inner2').call();
-
-					defer((err) => deferCalls.set(name, err!.kind));
-
-					await new Promise((r) => setTimeout(r, 10));
-					throw error.Outer();
-				}
+			if (name === 'Inner1') {
+				await new Promise((r) => setTimeout(r, 0));
+				throw yield* error.Inner1();
 			}
-		);
-		await fn('Outer').call();
-		deferCalls.forEach((v, k) => expect(k).toEqual(v));
+
+			if (name === 'Inner2') {
+				yield* defer((err) => deferCalls.set({ name }, err!.kind));
+
+				await new Promise((r) => setTimeout(r, 5));
+				throw yield* error.Inner2();
+			}
+
+			if (name === 'Outer') {
+				fn('Inner1').option();
+				fn('Inner2').option();
+
+				yield* defer((err) => deferCalls.set({ name }, err!.kind));
+
+				await new Promise((r) => setTimeout(r, 10));
+				throw yield* error.Outer();
+			}
+		});
+		await fn('Outer').option();
+		deferCalls.forEach((v, k) => {
+			console.log(k.name, v);
+		});
+
+		deferCalls.forEach((v, k) => expect(k.name).toEqual(v));
 	});
 });
 
 describe('option method', () => {
 	test('returns value on success', () => {
-		const fn = func((x: number) => x + 1);
+		const fn = func(function* (x: number) {
+			return x + 1;
+		});
 		expect(fn(1).option()).toBe(2);
 	});
 
 	test('returns undefined on error', () => {
-		const fn = func({ MyError: 'fail' }, (x: number) => {
+		const fn = func(function* (x: number) {
+			yield { MyError: 'fail' };
 			if (x === 0) throw new Error('fail');
 			return x + 1;
 		});
@@ -230,12 +233,15 @@ describe('option method', () => {
 	});
 
 	test('works with async success', async () => {
-		const fn = func(async (x: number) => Promise.resolve(x + 1));
+		const fn = func(async function* (x: number) {
+			return x + 1;
+		});
 		expect(await fn(2).option()).toBe(3);
 	});
 
 	test('returns undefined on async error', async () => {
-		const fn = func({ MyError: 'fail' }, async (x: number) => {
+		const fn = func(async function* (x: number) {
+			yield { MyError: 'fail' };
 			if (x === 0) throw new Error('fail');
 			return x + 1;
 		});
@@ -243,20 +249,20 @@ describe('option method', () => {
 	});
 });
 
-describe('call util', () => {
+describe('result util', () => {
 	test('returns ok:true and value on success', () => {
-		const fn = func(() => {
-			const { call } = getFuncUtils<typeof fn>();
-			return call(() => 42);
+		const fn = func(function* () {
+			const { result } = fn.utils;
+			return yield* result(() => 42);
 		});
 		const result = fn().try() as { ok: true; value: number };
 		expect(result).toEqual({ ok: true, value: 42 });
 	});
 
 	test('returns ok:false and error on throw', () => {
-		const fn = func(() => {
-			const { call } = getFuncUtils<typeof fn>();
-			return call(() => {
+		const fn = func(function* () {
+			const { result } = fn.utils;
+			return yield* result(() => {
 				throw new Error('fail');
 			});
 		});
@@ -266,18 +272,18 @@ describe('call util', () => {
 	});
 
 	test('works with async success', async () => {
-		const fn = func(async () => {
-			const { call } = getFuncUtils<typeof fn>();
-			return await call(async () => 123);
+		const fn = func(async function* () {
+			const { result } = fn.utils;
+			return yield* result(async () => 123);
 		});
 		const result = (await fn().try()) as { ok: true; value: number };
 		expect(result).toEqual({ ok: true, value: 123 });
 	});
 
 	test('works with async error', async () => {
-		const fn = func(async () => {
-			const { call } = getFuncUtils<typeof fn>();
-			return await call(async () => {
+		const fn = func(async function* () {
+			const { result } = fn.utils;
+			return yield* result(async () => {
 				throw new Error('fail');
 			});
 		});
@@ -289,9 +295,10 @@ describe('call util', () => {
 
 describe('throws util', () => {
 	test('rethrows with custom error', () => {
-		const fn = func({ MyError: 'fail' }, () => {
-			const { error, throws } = getFuncUtils<typeof fn>();
-			throws(error.MyError(), () => {
+		const fn = func(function* () {
+			yield { MyError: 'fail' };
+			const { error, throws } = fn.utils;
+			yield* throws(yield* error.MyError(), () => {
 				throw new Error('inner');
 			});
 		});
@@ -299,9 +306,10 @@ describe('throws util', () => {
 	});
 
 	test('throws wraps unknown error', () => {
-		const fn = func({ MyError: 'fail' }, () => {
-			const { error, throws } = getFuncUtils<typeof fn>();
-			throws(error.MyError(), () => {
+		const fn = func(function* () {
+			yield { MyError: 'fail' };
+			const { error, throws } = fn.utils;
+			yield* throws(yield* error.MyError(), () => {
 				throw 123;
 			});
 		});
@@ -311,9 +319,10 @@ describe('throws util', () => {
 
 describe('catch method', () => {
 	test('handler receives error', () => {
-		const fn = func({ MyError: 'fail' }, () => {
-			const { error } = getFuncUtils<typeof fn>();
-			if (1 === 1) throw error.MyError();
+		const fn = func(function* () {
+			yield { MyError: 'fail' };
+			const { error } = fn.utils;
+			if (1 === 1) throw yield* error.MyError();
 			return '';
 		});
 		const result = fn().catch((err) => err.message);
@@ -321,42 +330,47 @@ describe('catch method', () => {
 	});
 
 	test('works with async', async () => {
-		const fn = func({ MyError: 'fail' }, async () => {
-			const { error } = getFuncUtils<typeof fn>();
-			throw error.MyError();
+		const fn = func(async function* () {
+			yield { MyError: 'fail' };
+			const { error } = fn.utils;
+			throw yield* error.MyError();
 		});
 		const result = await fn().catch((err) => err.message);
 		expect(result).toBe('fail');
 	});
 });
 
-describe('call method', () => {
+describe('result method', () => {
 	test('returns ok:true and value on success', () => {
-		const fn = func((x: number) => x + 1);
-		const result = fn(2).call() as { ok: true; value: number };
+		const fn = func(function* (x: number) {
+			return x + 1;
+		});
+		const result = fn(2).result() as { ok: true; value: number };
 		expect(result).toEqual({ ok: true, value: 3 });
 	});
 
 	test('returns ok:false and error on error', () => {
-		const fn = func({ MyError: 'fail' }, () => {
+		const fn = func(function* () {
 			throw new Error('fail');
 		});
-		const result = fn().call() as { ok: false; error: any };
+		const result = fn().result() as { ok: false; error: any };
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeInstanceOf(Error);
 	});
 
 	test('works with async success', async () => {
-		const fn = func(async (x: number) => x + 1);
-		const result = (await fn(2).call()) as { ok: true; value: number };
+		const fn = func(async function* (x: number) {
+			return x + 1;
+		});
+		const result = (await fn(2).result()) as { ok: true; value: number };
 		expect(result).toEqual({ ok: true, value: 3 });
 	});
 
 	test('works with async error', async () => {
-		const fn = func({ MyError: 'fail' }, async () => {
+		const fn = func(async function* () {
 			throw new Error('fail');
 		});
-		const result = (await fn().call()) as { ok: false; error: any };
+		const result = (await fn().result()) as { ok: false; error: any };
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeInstanceOf(Error);
 	});
@@ -364,33 +378,41 @@ describe('call method', () => {
 
 describe('multilayer error propagation', () => {
 	test('error thrown through multiple func layers', () => {
-		const fn0 = func({ fn0: 'fn0 m' }, () => {
+		const fn0 = func(function* () {
+			yield { fn0: 'fn0 m' };
 			throw new Error('initial');
 		});
-		const fn1 = func({ fn1: 'fn1 m' }, () => {
+		const fn1 = func(function* () {
+			yield { fn1: 'fn1 m' };
 			fn0().try();
 		});
-		const fn2 = func({ fn2: 'fn2 m' }, () => {
+		const fn2 = func(function* () {
+			yield { fn2: 'fn2 m' };
 			fn1().try();
 		});
-		const fn3 = func({ fn3: 'fn3 m' }, () => {
+		const fn3 = func(function* () {
+			yield { fn3: 'fn3 m' };
 			fn2().try();
 		});
 		expect(() => fn3().try()).toThrow('initial');
 	});
 
 	test('custom error thrown through multiple func layers', () => {
-		const fn0 = func({ fn0: 'fn0 m' }, () => {
-			const { error } = getFuncUtils<typeof fn0>();
-			throw error.fn0();
+		const fn0 = func(function* () {
+			yield { fn0: 'fn0 m' };
+			const { error } = fn0.utils;
+			throw yield* error.fn0();
 		});
-		const fn1 = func({ fn1: 'fn1 m' }, () => {
+		const fn1 = func(function* () {
+			yield { fn1: 'fn1 m' };
 			fn0().try();
 		});
-		const fn2 = func({ fn2: 'fn2 m' }, () => {
+		const fn2 = func(function* () {
+			yield { fn2: 'fn2 m' };
 			fn1().try();
 		});
-		const fn3 = func({ fn3: 'fn3 m' }, () => {
+		const fn3 = func(function* () {
+			yield { fn3: 'fn3 m' };
 			fn2().try();
 		});
 		expect(() => fn3().try()).toThrow('fn0 m');

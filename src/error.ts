@@ -1,3 +1,7 @@
+import type { Maybe } from './helpers';
+
+const contextId = Symbol('contextId');
+
 export const DEFAULT_ERROR_KIND = 'UnexpectedError';
 export const DEFAULT_ERROR_MESSAGE = 'Something went wrong';
 
@@ -10,6 +14,14 @@ export type DefaultErrorSet = {
 export type ErrorCreator = (...args: any) => string;
 
 export class CustomError<T extends ErrorSet> extends Error {
+	#contextId: symbol;
+
+	static getOriginContextId = (error: unknown): Maybe<symbol> => {
+		if (error && error instanceof CustomError) {
+			return error.#contextId;
+		}
+	};
+
 	static init = <T extends ErrorSet>(
 		id: symbol,
 		kind: string & keyof T,
@@ -29,7 +41,7 @@ export class CustomError<T extends ErrorSet> extends Error {
 			// FIXME: Issue: Mutating error objects can lead to confusing stack traces and error propagation issues.
 			// Suggestion: Prefer creating a new error instance, or at least document this behavior clearly.
 			err.cause = err.cause ?? { ...err };
-			err.id = id;
+			err.#contextId = id;
 			err.kind = kind;
 			err.message = message;
 			err.name = `${kind} [cause below]`;
@@ -41,7 +53,7 @@ export class CustomError<T extends ErrorSet> extends Error {
 	};
 
 	constructor(
-		public id: symbol, // TODO: hide id prop [Symbol.id]
+		id: symbol,
 		public kind: string & keyof T,
 		public message: string,
 		public cause?: unknown
@@ -52,6 +64,7 @@ export class CustomError<T extends ErrorSet> extends Error {
 		Error.stackTraceLimit = stackTraceLimit;
 		Error.captureStackTrace(this, CustomError.init);
 
-		this.name = kind;
+		this.name = kind; // TODO: remove kind prop?
+		this.#contextId = id;
 	}
 }

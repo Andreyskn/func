@@ -16,6 +16,7 @@ import { store } from './store';
 import type { UtilCommand, Utils } from './utils';
 
 // TODO: eslint rule to to detect partially called funcs
+// FIXME: yield breaks type inference
 
 export type CatchHandlerReturn<
 	H extends AnyFunction,
@@ -75,7 +76,7 @@ export type FuncProcessor<
 	R extends any = InferFuncGenReturn<G>,
 	F extends AnyFunction = (...args: P) => R,
 	E extends ErrorSet = InferFuncGenErrors<G>
-> = (...args: P) => FuncProcessorMethods<F, E> & Utils<E>;
+> = ((...args: P) => FuncProcessorMethods<F, E>) & Pick<Utils<E>, 'utils'>;
 
 export type FuncProcessorMethods<
 	F extends AnyFunction,
@@ -160,15 +161,10 @@ export const func = <
 	const process = (ctx: Context) => {
 		try {
 			while (true) {
-				const { payload } = ctx;
+				const { payload, generator, utils } = ctx;
 				ctx.payload = undefined;
 
-				if (payload && payload instanceof CustomError) {
-					ctx.generator.throw(payload);
-					continue;
-				}
-
-				const result = ctx.generator.next(payload);
+				const result = generator.next(payload);
 
 				if (isPromise(result)) {
 					ctx.result = { kind: ContextResultKind.Promise, promise: result };
@@ -187,7 +183,7 @@ export const func = <
 				}
 
 				if (store.isUtilsCommand(value)) {
-					ctx.payload = ctx.utils?.execute(value);
+					ctx.payload = utils?.execute(value);
 				} else {
 					ctx.errorSet = value as E;
 				}
@@ -202,15 +198,14 @@ export const func = <
 	const processAsync = async (ctx: Context) => {
 		try {
 			while (true) {
-				const { payload } = ctx;
+				const { payload, generator, result, utils } = ctx;
 				ctx.payload = undefined;
 
-				if (payload instanceof CustomError) {
-					ctx.generator.throw(payload);
-					continue;
-				}
+				const firstYield = (result as Maybe<ContextResultPromise>)?.promise;
+				ctx.result = undefined;
 
-				const { value, done } = await ctx.generator.next(payload);
+				const { value, done } =
+					(await firstYield) ?? (await generator.next(payload));
 
 				if (done) {
 					ctx.result = { kind: ContextResultKind.Resolved, value };
@@ -222,7 +217,7 @@ export const func = <
 				}
 
 				if (store.isUtilsCommand(value)) {
-					ctx.payload = ctx.utils?.execute(value);
+					ctx.payload = utils?.execute(value);
 				} else {
 					ctx.errorSet = value as E;
 				}
@@ -235,13 +230,16 @@ export const func = <
 	};
 
 	const handleCatch = (ctx: Context, error: unknown) => {
-		if (error && error instanceof CustomError && error.id === ctx.id) {
-			ctx.result = { kind: ContextResultKind.Error, error };
+		if (CustomError.getOriginContextId(error) === ctx.id) {
+			ctx.result = {
+				kind: ContextResultKind.Error,
+				error: error as CustomError<E>,
+			};
 			return;
 		}
 
 		const message =
-			(error && typeof error === 'object' && (error as any).message) ||
+			(!!error && error instanceof Error && error.message) ||
 			DEFAULT_ERROR_MESSAGE;
 
 		ctx.result = {
