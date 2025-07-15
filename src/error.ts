@@ -1,7 +1,5 @@
 import type { Maybe } from './helpers';
 
-const contextId = Symbol('contextId');
-
 export const DEFAULT_ERROR_KIND = 'UnexpectedError';
 export const DEFAULT_ERROR_MESSAGE = 'Something went wrong';
 

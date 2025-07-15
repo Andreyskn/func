@@ -1,4 +1,12 @@
-import './utils';
+//#region codegen scripts/importer.ts
+import * as error from './error';
+import * as func from './func';
+import * as helpers from './helpers';
+import * as module from './module';
+import * as utils from './utils';
+
+module.setModules({ func, error, module, helpers, utils });
+//#endregion
 
 export type {
 	CustomError,

@@ -6,7 +6,7 @@ import {
 } from './error';
 import type { Context, DeferredFn } from './func';
 import { isPromise, type AnyFunction } from './helpers';
-import { store } from './store';
+import { module } from './module';
 
 export type Utils<
 	E extends ErrorSet,
@@ -133,12 +133,11 @@ export const initUtils = (ctx: Context) => {
 				}
 
 				case THROWS:
-					return store
+					return module.func
 						.func(function* () {
 							const out = payload.fn();
 
 							if (isPromise(out)) {
-								// TODO: test
 								return out.catch((err) => {
 									payload.error.cause = err;
 									throw payload.error;
@@ -153,7 +152,7 @@ export const initUtils = (ctx: Context) => {
 						});
 
 				case RESULT:
-					return store
+					return module.func
 						.func(function* () {
 							const out = payload.fn();
 
@@ -177,6 +176,3 @@ export const initUtils = (ctx: Context) => {
 	ctx.utils = utils;
 	return utils;
 };
-
-store.setInitUtils(initUtils);
-store.setIsUtilsCommand(isUtilsCommand);

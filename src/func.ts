@@ -12,7 +12,7 @@ import {
 	type Maybe,
 	type Replace,
 } from './helpers';
-import { store } from './store';
+import { module } from './module';
 import type { UtilCommand, Utils } from './utils';
 
 // TODO: eslint rule to to detect partially called funcs
@@ -182,7 +182,7 @@ export const func = <
 					throw Error(`Expected object, received "${value}"`);
 				}
 
-				if (store.isUtilsCommand(value)) {
+				if (module.utils.isUtilsCommand(value)) {
 					ctx.payload = utils?.execute(value);
 				} else {
 					ctx.errorSet = value as E;
@@ -216,7 +216,7 @@ export const func = <
 					throw Error(`Expected object, received "${value}"`);
 				}
 
-				if (store.isUtilsCommand(value)) {
+				if (module.utils.isUtilsCommand(value)) {
 					ctx.payload = utils?.execute(value);
 				} else {
 					ctx.errorSet = value as E;
@@ -263,7 +263,7 @@ export const func = <
 				const deferredFn = deferred.pop()! as DeferredFn<E>;
 
 				try {
-					// TODO: pass AggregateError
+					// pass AggregateError
 					deferredFn(
 						ctx.result.kind === ContextResultKind.Error
 							? ctx.result.error
@@ -276,7 +276,7 @@ export const func = <
 
 			if (errors.length) {
 				// TODO: AggregateError https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError
-				ctx.result = { kind: ContextResultKind.Error, error: errors[0] }; // TODO: don't forget the original error
+				ctx.result = { kind: ContextResultKind.Error, error: errors[0] }; // don't forget the original error
 			}
 		}
 	};
@@ -286,7 +286,7 @@ export const func = <
 			id: Symbol(),
 			generator: fn(...args),
 		};
-		Object.assign(processor, store.initUtils(ctx));
+		Object.assign(processor, module.utils.initUtils(ctx));
 
 		const methods: FuncProcessorMethods<F, E> = {
 			try() {
@@ -357,5 +357,3 @@ export const func = <
 
 	return processor as any;
 };
-
-store.setFunc(func);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { func } from '../src';
+import { func, type AsyncFuncGen } from '../src';
 
 describe('sync', () => {
 	const syncFn = func(function* (arg: string) {
@@ -302,18 +302,25 @@ describe('throws util', () => {
 				throw new Error('inner');
 			});
 		});
-		expect(() => fn().try()).toThrow('fail');
+		expect(fn().try).toThrow('fail');
 	});
 
-	test('throws wraps unknown error', () => {
-		const fn = func(function* () {
+	test('rethrows with custom error. async', async () => {
+		const fn = func(async function* (): AsyncFuncGen<
+			number,
+			{ MyError: string }
+		> {
 			yield { MyError: 'fail' };
 			const { error, throws } = fn.utils;
-			yield* throws(yield* error.MyError(), () => {
-				throw 123;
+			return yield* throws(yield* error.MyError(), async () => {
+				await new Promise((r) => setTimeout(r, 0));
+				if (1) throw 123;
+				return 1;
 			});
 		});
-		expect(() => fn().try()).toThrow('fail');
+		const result = await fn().catch((e) => e);
+		expect(result).toBeInstanceOf(Error);
+		expect((result as Error).message).toBe('fail');
 	});
 });
 
