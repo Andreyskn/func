@@ -103,7 +103,7 @@ const error = new Proxy(
 	}
 );
 
-export const isUtilsCommand = (v: Record<keyof any, any>): boolean => {
+export const isUtilsCommand = (v: Record<keyof any, any>): v is UtilCommand => {
 	return UTIL_SYMBOLS.includes(v['kind']);
 };
 

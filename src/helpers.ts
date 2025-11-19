@@ -19,6 +19,6 @@ export const isPromise = <T = any>(value: unknown): value is Promise<T> => {
 	);
 };
 
-export const isObject = (x: Record<keyof any, unknown>): boolean => {
-	return typeof x === 'object' && x !== null;
+export const isObject = (x: unknown): x is Record<keyof any, unknown> => {
+	return !!x && typeof x === 'object' && !Array.isArray(x);
 };
