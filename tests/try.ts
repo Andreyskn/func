@@ -1,4 +1,4 @@
-import { func, type AsyncFuncGen } from './src';
+import { func, type AsyncFuncGen } from '../src';
 
 type SyncFnErrors = {
 	SyncError: string;
@@ -6,7 +6,7 @@ type SyncFnErrors = {
 };
 
 const syncFn = func(async function* (
-	arg: string
+	arg: string,
 ): AsyncFuncGen<string, SyncFnErrors> {
 	yield {
 		SyncError: 'SyncError message',

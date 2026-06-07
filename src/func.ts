@@ -35,7 +35,7 @@ export type OptionReturn<
 	R = ReturnType<F>
 > = R extends Promise<infer V> ? Promise<Maybe<V>> : Maybe<R>;
 
-export type CallReturn<
+export type ResultReturn<
 	F extends AnyFunction,
 	E extends ErrorSet,
 	R = ReturnType<F>
@@ -50,9 +50,9 @@ export type AsyncFuncGen<R, E extends ErrorSet> = AsyncGenerator<
 	R
 >;
 
-type AnyFuncGen = FuncGen<any, any> | AsyncFuncGen<any, any>;
+export type AnyFuncGen = FuncGen<any, any> | AsyncFuncGen<any, any>;
 
-type InferFuncGenReturn<G extends AnyFuncGen> = G extends AsyncFuncGen<
+export type InferFuncGenReturn<G extends AnyFuncGen> = G extends AsyncFuncGen<
 	infer R,
 	any
 >
@@ -61,7 +61,7 @@ type InferFuncGenReturn<G extends AnyFuncGen> = G extends AsyncFuncGen<
 	? R
 	: never;
 
-type InferFuncGenErrors<G extends AnyFuncGen> = G extends AsyncFuncGen<
+export type InferFuncGenErrors<G extends AnyFuncGen> = G extends AsyncFuncGen<
 	any,
 	infer E
 >
@@ -88,7 +88,7 @@ export type FuncProcessorMethods<
 		handler: H
 	) => CatchReturn<F, H>;
 	option: () => OptionReturn<F>;
-	result: () => CallReturn<F, ED>;
+	result: () => ResultReturn<F, ED>;
 };
 
 const enum ContextResultKind {

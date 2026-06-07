@@ -17,15 +17,29 @@ export type {
 } from './error';
 export { func } from './func';
 export type {
+	AnyFuncGen,
 	AsyncFuncGen,
-	CallReturn,
 	CatchHandlerReturn,
 	CatchReturn,
 	DeferredFn,
 	FuncGen,
 	FuncProcessor,
 	FuncProcessorMethods,
+	InferFuncGenErrors,
+	InferFuncGenReturn,
 	OptionReturn,
+	ResultReturn,
 } from './func';
 export type { AnyFunction, Maybe } from './helpers';
-export type { UtilResultReturn, Utils } from './utils';
+export type {
+	DeferCommand,
+	ErrorCommand,
+	ResultCommand,
+	ThrowsCommand,
+	UTIL_SYMBOLS,
+	UtilCommand,
+	UtilCommandBase,
+	UtilResultReturn,
+	Utils,
+	UtilSymbol,
+} from './utils';

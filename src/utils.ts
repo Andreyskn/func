@@ -47,28 +47,31 @@ const DEFER = Symbol('DEFER');
 const THROWS = Symbol('THROWS');
 const RESULT = Symbol('RESULT');
 
-const UTIL_SYMBOLS = [ERROR, DEFER, THROWS, RESULT] as const;
+export const UTIL_SYMBOLS = [ERROR, DEFER, THROWS, RESULT] as const;
 
-type UtilSymbol = (typeof UTIL_SYMBOLS)[number];
+export type UtilSymbol = (typeof UTIL_SYMBOLS)[number];
 
-type UtilCommandBase<S extends UtilSymbol, T> = { kind: S; payload: T };
+export type UtilCommandBase<S extends UtilSymbol, T> = { kind: S; payload: T };
 
-type ErrorCommand = UtilCommandBase<
+export type ErrorCommand = UtilCommandBase<
 	typeof ERROR,
 	{ errorKind: string; args: any[] }
 >;
 
-type DeferCommand = UtilCommandBase<
+export type DeferCommand = UtilCommandBase<
 	typeof DEFER,
 	{ fn: (err?: CustomError<any>) => void }
 >;
 
-type ThrowsCommand = UtilCommandBase<
+export type ThrowsCommand = UtilCommandBase<
 	typeof THROWS,
 	{ error: CustomError<any>; fn: () => unknown }
 >;
 
-type ResultCommand = UtilCommandBase<typeof RESULT, { fn: () => unknown }>;
+export type ResultCommand = UtilCommandBase<
+	typeof RESULT,
+	{ fn: () => unknown }
+>;
 
 export type UtilCommand =
 	| ErrorCommand
